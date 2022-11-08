@@ -430,16 +430,20 @@ async function addAssetsToAlbum(
   albumId: string,
   assetIds: string[]
 ) {
-  try {
-    await axios.put(
-      `${endpoint}/album/${albumId}/assets`,
-      { assetIds: [...new Set(assetIds)] },
-      {
-        headers: { Authorization: `Bearer ${accessToken} ` },
-      }
-    );
-  } catch (e) {
-    log(chalk.red("Error adding asset to album"), e);
+  const sliceSize = 300
+  for(let i = 0; (i * sliceSize) < assetIds.length; i++) {
+    let assetIdsSlice = assetIds.slice(i * sliceSize, (i + 1) * sliceSize)
+    try {
+      await axios.put(
+          `${endpoint}/album/${albumId}/assets`,
+          { assetIds: [...new Set(assetIdsSlice)] },
+          {
+            headers: { Authorization: `Bearer ${accessToken} ` },
+          }
+      );
+    } catch (e) {
+      log(chalk.red("Error adding asset to album"), e);
+    }
   }
 }
 
