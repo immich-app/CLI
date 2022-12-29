@@ -92,6 +92,12 @@ program
   )
   .addOption(
     new Option(
+      "-gt, --google-takeout",
+      "Load additional metadata from Google Takeout export json files"
+    ).env("IMMICH_GOOGLE_TAKEOUT")
+  )
+  .addOption(
+    new Option(
       "-al, --album [album]",
       "Create albums for assets based on the parent folder or a given name. Only adds new assets to the album(s)"
     ).env("IMMICH_CREATE_ALBUMS")
@@ -109,12 +115,14 @@ async function upload({
   delete: deleteAssets,
   uploadThreads,
   album: createAlbums,
+  googleTakeout: fromGoogleTakeout,
 }: any) {
   const endpoint = server;
   const deviceId = (await si.uuid()).os || "CLI";
   const osInfo = (await si.osInfo()).distro;
   const localAssets: any[] = [];
   const newAssets: any[] = [];
+  const existingAssets: any[] = [];
 
   // Ping server
   log("[1] Pinging server...");
@@ -210,7 +218,7 @@ async function upload({
         },
         cliProgress.Presets.shades_classic
       );
-      progressBar.start(newAssets.length, 0, { filepath: "" });
+      progressBar.start(localAssets.length, 0, { filepath: "" });
 
       const assetDirectoryMap: Map<string, string[]> = new Map();
 
@@ -218,37 +226,65 @@ async function upload({
 
       const limit = pLimit(uploadThreads ?? 5);
 
-      for (const asset of newAssets) {
+      for (const asset of localAssets) {
         const album = asset.filePath.split(path.sep).slice(-2)[0];
         if (!assetDirectoryMap.has(album)) {
           assetDirectoryMap.set(album, []);
         }
-        uploadQueue.push(
-          limit(async () => {
-            try {
-              const res = await startUpload(
-                endpoint,
-                accessToken,
-                asset,
-                deviceId
-              );
-              progressBar.increment(1, { filepath: asset.filePath });
-              if (res && res.status == 201) {
-                if (deleteLocalAsset == "y") {
-                  fs.unlink(asset.filePath, (err) => {
-                    if (err) {
-                      log(err);
-                      return;
-                    }
-                  });
+
+        if (!backupAsset.includes(asset.id)) {
+          // New file, lets upload it!
+          uploadQueue.push(
+            limit(async () => {
+              try {
+                const res = await startUpload(
+                  endpoint,
+                  accessToken,
+                  asset,
+                  deviceId,
+                  fromGoogleTakeout
+                );
+                progressBar.increment(1, { filepath: asset.filePath });
+                if (res && res.status == 201) {
+                  if (deleteLocalAsset == "y") {
+                    fs.unlink(asset.filePath, (err) => {
+                      if (err) {
+                        log(err);
+                        return;
+                      }
+                    });
+                  }
+                  assetDirectoryMap.get(album)!.push(res!.data.id);
                 }
-                assetDirectoryMap.get(album)!.push(res!.data.id);
+              } catch (err) {
+                log(chalk.red(err.message));
               }
-            } catch (err) {
-              log(chalk.red(err.message));
-            }
-          })
-        );
+            })
+          );
+        } else {
+          // Existing file. No need to upload it BUT lets still add to Album.
+          if (createAlbums) {
+            uploadQueue.push(
+              limit(async () => {
+                try {
+                  const res = await axios.post(
+                    `${endpoint}/asset/check`,
+                    {
+                      deviceAssetId: asset.id,
+                      deviceId,
+                    },
+                    {
+                      headers: { Authorization: `Bearer ${accessToken} ` },
+                    }
+                  );
+                  assetDirectoryMap.get(album)!.push(res!.data.id);
+                } catch (err) {
+                  log(chalk.red(err.message));
+                }
+              })
+            )
+          }
+        }
       }
 
       const uploads = await Promise.all(uploadQueue);
@@ -329,7 +365,8 @@ async function startUpload(
   endpoint: string,
   accessToken: string,
   asset: any,
-  deviceId: string
+  deviceId: string,
+  fromGoogleTakeout: boolean,
 ) {
   try {
     const assetType = getAssetType(asset.filePath);
@@ -357,7 +394,8 @@ async function startUpload(
     const createdAt =
       exifData && exifData.DateTimeOriginal != null
         ? new Date(exifData.DateTimeOriginal).toISOString()
-        : fileStat.mtime.toISOString();
+        : (fromGoogleTakeout && getTakeoutTimestamp(asset.filePath)) ||
+          fileStat.mtime.toISOString();
 
     const data = new FormData();
     data.append("deviceAssetId", asset.id);
@@ -394,6 +432,46 @@ async function startUpload(
     });
     return null;
   }
+}
+
+function loadFirstJSON(paths: string[]) {
+  while(paths.length > 0) {
+    try {
+      const path = paths.shift();
+      if (path) {
+        return require(path);
+      }
+    } catch (e) {
+    }
+  }
+  // None of the files found.
+  return null;
+}
+
+function getTakeoutTimestamp(filepath: string) {
+  const regex = /^(?<main>.*?)(?<inc>\(\d+\))?(?<ext>\.[a-zA-Z0-9]*)$/;
+
+  const match = regex.exec(filepath);
+  if(!match || !match.groups) {
+    log(chalk.red(`\nRegex match failed for ${filepath}`));
+    return null;
+  }
+
+  const { main, inc = '', ext } = match.groups;
+  const paths = [
+    `${main}${inc}${ext}.json`,   // file(1).jpg => file(1).jpg.json
+    `${main}${inc}.json`,         // file(1).jpg => file(1).json
+    `${main}${ext}${inc}.json`,   // file(1).jpg => file.jpg(1).json
+  ];
+
+  const data = loadFirstJSON(paths);
+  if (!data) {
+    log(chalk.yellow(`\nError getting Google Takeout timestamp from ${filepath}`));
+    return null;
+  }
+
+  const ts = data.photoTakenTime?.timestamp || data.creationTime.timestamp;
+  return new Date(ts * 1000).toISOString();
 }
 
 async function getAlbumsFromServer(endpoint: string, accessToken: string) {
