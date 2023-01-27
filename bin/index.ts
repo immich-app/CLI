@@ -57,34 +57,9 @@ program
   .command("upload")
   .description("Upload images and videos in a directory to Immich's server")
   .addOption(
-    new Option("-k, --key <value>", "API Key").env("IMMICH_API_KEY")
-  )
-  .addOption(
-    new Option(
-      "-s, --server <value>",
-      "Server address (http://<your-ip>:2283/api or https://<your-domain>/api)"
-    ).env("IMMICH_SERVER_ADDRESS")
-  )
-  .addOption(
-    new Option("-d, --directory <value>", "Target Directory").env(
-      "IMMICH_TARGET_DIRECTORY"
-    )
-  )
-  .addOption(
-    new Option("-y, --yes", "Assume yes on all interactive prompts").env(
-      "IMMICH_ASSUME_YES"
-    )
-  )
-  .addOption(
     new Option("-da, --delete", "Delete local assets after upload").env(
       "IMMICH_DELETE_ASSETS"
     )
-  )
-  .addOption(
-    new Option(
-      "-t, --threads",
-      "Amount of concurrent upload threads (default=5)"
-    ).env("IMMICH_UPLOAD_THREADS")
   )
   .addOption(
     new Option(
@@ -93,6 +68,51 @@ program
     ).env("IMMICH_CREATE_ALBUMS")
   )
   .action(upload);
+
+  program
+  .command("download")
+  .description("Download images and videos into a directory from a specific album on Immich's server")
+  .addOption(
+    new Option("-da, --delete", "Delete local assets if not found in album").env(
+      "IMMICH_DELETE_ASSETS"
+    )
+  )
+  .addOption(
+    new Option(
+      "-al, --album <album>",
+      "Album to download"
+    ).env("IMMICH_ALBUM")
+  )
+  .action(download);
+
+  //Shared options
+  program.commands.forEach((cmd: any) => {
+    cmd.addOption(
+      new Option("-k, --key <value>", "API Key").env("IMMICH_API_KEY")
+    )
+    .addOption(
+      new Option(
+        "-s, --server <value>",
+        "Server address (http://<your-ip>:2283/api or https://<your-domain>/api)"
+      ).env("IMMICH_SERVER_ADDRESS")
+    )
+    .addOption(
+      new Option("-d, --directory <value>", "Target Directory").env(
+        "IMMICH_TARGET_DIRECTORY"
+      )
+    )
+    .addOption(
+      new Option("-y, --yes", "Assume yes on all interactive prompts").env(
+        "IMMICH_ASSUME_YES"
+      )
+    )
+    .addOption(
+      new Option(
+        "-t, --threads",
+        "Amount of concurrent upload threads (default=5)"
+      ).env("IMMICH_UPLOAD_THREADS")
+    )
+  });
 
 program.parse(process.argv);
 
@@ -344,6 +364,154 @@ async function upload({
   }
 }
 
+async function download({
+  key,
+  server,
+  directory,
+  yes: assumeYes,
+  delete: deleteAssets,
+  downloadThreads,
+  album
+}: any) {
+  const endpoint = server;
+  const localAssets: any[] = [];
+  const downloadAssets: any[] = [];
+  const removeAssets: any[] = [];
+
+  // Ping server
+  log("[1] Pinging server...");
+  await pingServer(endpoint);
+
+  // Login
+  log("[2] Logging in...");
+  const user = await validateConnection(endpoint, key);
+  log(chalk.yellow(`Connected to Immich with user ${user.email}`));
+
+  // Check if directory exist
+  log("[3] Checking directory...");
+  if (fs.existsSync(directory)) {
+    log(chalk.green("Directory status: OK"));
+  } else {
+    log(chalk.red("Error navigating to directory - check directory path"));
+    process.exit(1);
+  }
+
+  log("[4] Fetching albums...");
+  const serverAlbums = await getAlbumsFromServer(endpoint, key);
+  const sourceAlbum = serverAlbums.find((a: any) => a.albumName == album);
+  if(!sourceAlbum) {
+    log(chalk.red(`Unable to find album on server: ${album}`));
+    process.exit(1);
+  }
+
+  log("[5] Fetching remote album assets...");
+  const albumInfo = await getAlbumInfo(endpoint, key, sourceAlbum.id);
+  if(!albumInfo) {
+    log(chalk.red("Unable to fetch remote album info"));
+    process.exit(1);
+  }
+
+  const remoteAssets = albumInfo.assets;
+  log(chalk.yellow(`Found ${remoteAssets.length} remote assets`));
+
+  // Index provided directory
+  log("[6] Indexing local files...");
+  const api = new fdir().withFullPaths().crawl(directory);
+  const files = (await api.withPromise()) as any[];
+
+  for (const filePath of files) {
+    const mimeType = mime.lookup(filePath) as string;
+    if (SUPPORTED_MIME.includes(mimeType)) {
+      localAssets.push({
+        id: path.parse(filePath).name,
+        filePath,
+      });
+    }
+  }
+  log(chalk.green("Indexing files: OK"));
+  log(
+    chalk.yellow(`Found ${localAssets.length} local assets`)
+  );
+
+  for (const remoteAsset of remoteAssets) {
+    if(!localAssets.find((localAsset: any) => localAsset.id == remoteAsset.id)) {
+      downloadAssets.push(remoteAsset);
+    }
+  }
+
+  for (const localAsset of localAssets) {
+    if(!remoteAssets.find((remoteAsset: any) => localAsset.id == remoteAsset.id)) {
+      removeAssets.push(localAsset);
+    }
+  }
+
+  log(chalk.green(`Assets to download: ${downloadAssets.length}`));
+
+  if(deleteAssets) {
+    log(chalk.green(`Assets to remove: ${removeAssets.length}`));
+  }
+
+  if(downloadAssets.length + removeAssets.length == 0) {
+    log(chalk.green("Finished! - No changes found"));
+    process.exit(0);
+  }
+
+  const answer = assumeYes
+  ? "y"
+  : await new Promise((resolve) => {
+    rl.question("Do you want to start processing now? (y/n) ", resolve);
+  });
+
+  if (answer != "y") {
+    log(chalk.yellow("Abort Download Process"));
+    process.exit(1);
+  }
+
+  log("[7] Proccessing...");
+
+  if(downloadAssets.length > 0) {
+
+    const downloadQueue = [];
+    const limit = pLimit(downloadThreads ?? 5);
+    const progressBar = new cliProgress.SingleBar(
+      {
+        format:
+          "Download Progress | {bar} | {percentage}% || {value}/{total} || Current file [{filepath}]",
+      },
+      cliProgress.Presets.shades_classic
+    );
+    progressBar.start(downloadAssets.length, 0, { filepath: "" });
+
+    for (const asset of downloadAssets) {
+      downloadQueue.push(
+        limit(async () => {
+          await downloadAsset(endpoint, key, asset.id, path.join(directory, asset.id + path.extname(asset.originalPath)));
+          progressBar.increment(1, { filepath: asset.id });
+        })
+      );
+    }
+
+    await Promise.all(downloadQueue);
+    progressBar.stop();
+    log(chalk.green(`${downloadAssets.length} asset(s) downloaded`));
+  }
+
+  if(deleteAssets && removeAssets.length > 0) {
+    for (const asset of removeAssets) {
+      fs.unlink(asset.filePath, (err) => {
+        if (err) {
+          log(err);
+          return;
+        }
+      });
+    }
+    log(chalk.green(`${removeAssets.length} asset(s) removed`));
+  }
+
+  log(chalk.green("Finished!"));
+  process.exit(0);
+}
+
 async function startUpload(
   endpoint: string,
   key: string,
@@ -427,6 +595,18 @@ async function getAlbumsFromServer(endpoint: string, key: string) {
   }
 }
 
+async function getAlbumInfo(endpoint: string, key: string, albumId: string) {
+  try {
+    const res = await axios.get(`${endpoint}/album/${albumId}`, {
+      headers: { "x-api-key": key },
+    });
+    return res.data;
+  } catch (e) {
+    log(chalk.red("Error getting album info"), e);
+    process.exit(1);
+  }
+}
+
 async function createAlbum(
   endpoint: string,
   key: string,
@@ -446,6 +626,33 @@ async function createAlbum(
   }
 }
 
+async function downloadAsset(
+  endpoint: string,
+  key: string,
+  assetId: string,
+  path: string
+) {
+  try {
+    const writer = fs.createWriteStream(path)
+
+    const res = await axios.get(
+      `${endpoint}/asset/download/${assetId}`,
+      {
+        headers: { "x-api-key": key },
+        responseType: 'stream'
+      }
+    );
+    res.data.pipe(writer);
+
+    return new Promise((resolve, reject) => {
+      writer.on('finish', resolve)
+      writer.on('error', reject)
+    });
+
+  } catch (e) {
+    log(chalk.red(`Error downloading asset: '${assetId}'`), e);
+  }
+}
 async function addAssetsToAlbum(
   endpoint: string,
   key: string,
