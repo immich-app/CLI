@@ -80,7 +80,7 @@ program
   .addOption(
     new Option(
       "-al, --album <album>",
-      "Album to download"
+      "Album name or id to download"
     ).env("IMMICH_ALBUM")
   )
   .action(download);
@@ -398,13 +398,13 @@ async function download({
 
   log("[4] Fetching albums...");
   const serverAlbums = await getAlbumsFromServer(endpoint, key);
-  const sourceAlbum = serverAlbums.find((a: any) => a.albumName == album);
+  const sourceAlbum = serverAlbums.find((a: any) => a.id == album || a.albumName == album);
   if(!sourceAlbum) {
     log(chalk.red(`Unable to find album on server: ${album}`));
     process.exit(1);
   }
 
-  log("[5] Fetching remote album assets...");
+  log(`[5] Fetching remote album assets: ${sourceAlbum.albumName}`);
   const albumInfo = await getAlbumInfo(endpoint, key, sourceAlbum.id);
   if(!albumInfo) {
     log(chalk.red("Unable to fetch remote album info"));
