@@ -23,7 +23,7 @@ const rl = readline.createInterface({
 });
 let errorAssets: any[] = [];
 
-const SUPPORTED_MIME = [
+const SUPPORTED_MIME_TYPES = [
   // IMAGES
   "image/heif",
   "image/heic",
@@ -49,26 +49,26 @@ const SUPPORTED_MIME = [
 ];
 
 program
-  .name("Immich CLI Utilities")
-  .description("Immich CLI Utilities toolset")
+  .name("Immich CLI")
+  .description("Immich command line interface based on nodejs")
   .version(pjson.version);
 
 program
   .command("upload")
-  .description("Upload images and videos in a directory to Immich's server")
+  .description("Upload assets to an Immich instance")
   .addOption(
     new Option("-k, --key <value>", "API Key").env("IMMICH_API_KEY")
   )
   .addOption(
     new Option(
       "-s, --server <value>",
-      "Server address (http://<your-ip>:2283/api or https://<your-domain>/api)"
+      "Immich server address (http://<your-ip>:2283/api or https://<your-domain>/api)"
     ).env("IMMICH_SERVER_ADDRESS")
   )
   .addOption(
-    new Option("-d, --directory <value>", "Target Directory").env(
-      "IMMICH_TARGET_DIRECTORY"
-    )
+    new Option("-r, --recursive", "Recursive").env(
+      "IMMICH_RECURSIVE"
+    ).default(false)
   )
   .addOption(
     new Option("-y, --yes", "Assume yes on all interactive prompts").env(
@@ -98,14 +98,19 @@ program
       "Set a device UUID"
     ).env("IMMICH_DEVICE_UUID")
   )
-  .action(upload);
+  .argument(
+    '<paths...>'
+  )
+  .action((str, options) => {
+    upload(str, options);
+  });
 
 program.parse(process.argv);
 
-async function upload({
+async function upload(paths: String,{
   key,
   server,
-  directory,
+  recursive,
   yes: assumeYes,
   delete: deleteAssets,
   uploadThreads,
@@ -114,7 +119,6 @@ async function upload({
 }: any) {
   const endpoint = server;
   const deviceId = deviceUuid || (await si.uuid()).os || "CLI";
-  const osInfo = (await si.osInfo()).distro;
   const localAssets: any[] = [];
 
   // Ping server
@@ -126,24 +130,39 @@ async function upload({
   const user = await validateConnection(endpoint, key);
   log(chalk.yellow(`Connected to Immich with user ${user.email}`));
 
-  // Check if directory exist
-  log("[3] Checking directory...");
-  if (fs.existsSync(directory)) {
-    log(chalk.green("Directory status: OK"));
-  } else {
-    log(chalk.red("Error navigating to directory - check directory path"));
-    process.exit(1);
-  }
-
   // Index provided directory
   log("[4] Indexing files...");
-  const api = new fdir().withFullPaths().crawl(directory);
+  let crawler = new fdir().withFullPaths();
 
-  const files = (await api.withPromise()) as any[];
+  if (!recursive)
+  {
+    // Don't go into subfolders
+    crawler = crawler.withMaxDepth(0);
+  }
 
-  for (const filePath of files) {
+  let files: any[] = [];
+
+  for (const newPath of paths) {    
+    // Will throw error if path does not exist
+    await fs.promises.access(newPath);
+ 
+    if (await isDirectory(newPath)) 
+    {
+      // Is a directory so use the crawler to crawl it
+      const api = crawler.crawl(newPath);
+      files=files.concat((await api.withPromise()));
+
+    } else {
+      files.push(path.resolve(newPath));
+    }
+
+  }
+
+  const uniqueFiles = new Set(files);
+
+  for(const filePath of uniqueFiles) {
     const mimeType = mime.lookup(filePath) as string;
-    if (SUPPORTED_MIME.includes(mimeType)) {
+    if (SUPPORTED_MIME_TYPES.includes(mimeType)) {
       const fileStat = fs.statSync(filePath);
       localAssets.push({
         id: `${path.basename(filePath)}-${fileStat.size}`.replace(/\s+/g, ""),
@@ -489,7 +508,7 @@ async function pingServer(endpoint: string) {
     }
   } catch (e) {
     log(
-      chalk.red("Error connecting to server - check server address and port")
+      chalk.red("Error connecting to server - check server address and port: " + e)
     );
     process.exit(1);
   }
@@ -517,5 +536,8 @@ function getAssetType(filePath: string) {
   return mimeType.split("/")[0].toUpperCase();
 }
 
-// node bin/index.js upload --email testuser@email.com --password password --server http://10.1.15.216:2283/api -d /Users/alex/Documents/immich-cli-upload-test-location
-// node bin/index.js upload --help
+async function isDirectory(path: string) {  
+  const stats = await fs.promises.lstat(path)
+
+  return stats.isDirectory()
+}
