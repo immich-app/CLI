@@ -10,10 +10,10 @@ import FormData from 'form-data';
 import * as cliProgress from 'cli-progress';
 import { stat } from 'fs/promises';
 // GLOBAL
-import * as mime from 'mime-types';
 import chalk from 'chalk';
 import pjson from '../package.json';
 import pLimit from 'p-limit';
+import mime from 'mime';
 
 const log = console.log;
 const rl = readline.createInterface({
@@ -28,16 +28,11 @@ const SUPPORTED_MIME = [
   'image/heic',
   'image/jpeg',
   'image/png',
-  'image/jpg',
   'image/gif',
   'image/heic',
   'image/heif',
-  'image/dng',
-  'image/x-adobe-dng',
   'image/webp',
   'image/tiff',
-  'image/nef',
-  'image/x-nikon-nef',
 
   // VIDEO
   'video/mp4',
@@ -45,7 +40,18 @@ const SUPPORTED_MIME = [
   'video/quicktime',
   'video/x-msvideo',
   'video/3gpp',
+
+  //CUSTOM
+  'image/x-adobe-dng',
+  'image/x-nikon-nef',
 ];
+
+const custom_types = {
+  'image/x-adobe-dng': ['dng'],
+  'image/x-nikon-nef': ['nef'],
+};
+
+mime.define(custom_types);
 
 program.name('immich').description('Immich command line interface').version(pjson.version);
 
@@ -82,19 +88,11 @@ program
   .action((paths, options) => {
     if (options.directory) {
       if (paths.length > 0) {
-        log(
-          chalk.red(
-            "Error: Can't use deprecated --directory option when specifying paths"
-          )
-        );
+        log(chalk.red("Error: Can't use deprecated --directory option when specifying paths"));
         process.exit(1);
       }
       if (options.recursive) {
-        log(
-          chalk.red(
-            "Error: Can't use deprecated --directory option together with --recursive"
-          )
-        );
+        log(chalk.red("Error: Can't use deprecated --directory option together with --recursive"));
         process.exit(1);
       }
       log(
@@ -187,7 +185,7 @@ async function upload(
   const uniqueFiles = new Set(files);
 
   for (const filePath of uniqueFiles) {
-    const mimeType = mime.lookup(filePath) as string;
+    const mimeType = mime.getType(filePath) as string;
     if (SUPPORTED_MIME.includes(mimeType)) {
       const fileStat = fs.statSync(filePath);
       localAssets.push({
@@ -493,7 +491,7 @@ async function validateConnection(endpoint: string, key: string) {
 }
 
 function getAssetType(filePath: string) {
-  const mimeType = mime.lookup(filePath) as string;
+  const mimeType = mime.getType(filePath) as string;
 
   return mimeType.split('/')[0].toUpperCase();
 }
