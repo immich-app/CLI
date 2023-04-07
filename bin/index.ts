@@ -66,6 +66,7 @@ program
       'Immich server address (http://<your-ip>:2283/api or https://<your-domain>/api)',
     ).env('IMMICH_SERVER_ADDRESS'),
   )
+  .addOption(new Option('-re, --regex <value>', 'Regex for file filtering').env('IMMICH_FILTER'))
   .addOption(new Option('-r, --recursive', 'Recursive').env('IMMICH_RECURSIVE').default(false))
   .addOption(new Option('-y, --yes', 'Assume yes on all interactive prompts').env('IMMICH_ASSUME_YES'))
   .addOption(new Option('-da, --delete', 'Delete local assets after upload').env('IMMICH_DELETE_ASSETS'))
@@ -130,8 +131,10 @@ async function upload(
     uploadThreads,
     album: createAlbums,
     deviceUuid: deviceUuid,
+    regex
   }: any,
 ) {
+  const file_regex = new RegExp(regex)
   const endpoint = server;
   const deviceId = deviceUuid || (await si.uuid()).os || 'CLI';
   const osInfo = (await si.osInfo()).distro;
@@ -185,6 +188,7 @@ async function upload(
   const uniqueFiles = new Set(files);
 
   for (const filePath of uniqueFiles) {
+    if(!file_regex.test(filePath)) continue;
     const mimeType = mime.getType(filePath) as string;
     if (SUPPORTED_MIME.includes(mimeType)) {
       const fileStat = fs.statSync(filePath);
@@ -266,7 +270,7 @@ async function upload(
             limit(async () => {
               try {
                 const res = await startUpload(endpoint, key, asset, deviceId);
-                progressBar.increment(1, { filepath: asset.filePath });
+                progressBar.increment(1, { filepath: asset.filePath.replace(process.cwd(), "") });
                 if (res && (res.status == 201 || res.status == 200)) {
                   if (deleteLocalAsset == 'y') {
                     fs.unlink(asset.filePath, (err) => {
@@ -382,7 +386,9 @@ async function startUpload(endpoint: string, key: string, asset: any, deviceId: 
     data.append('fileExtension', path.extname(asset.filePath));
     data.append('duration', '0:00:00.000000');
 
-    data.append('assetData', fs.createReadStream(asset.filePath));
+    data.append('assetData', fs.createReadStream(asset.filePath), {
+      contentType: mime.getType(asset.filePath) || undefined
+    });
 
     const config: AxiosRequestConfig<any> = {
       method: 'post',
@@ -390,7 +396,7 @@ async function startUpload(endpoint: string, key: string, asset: any, deviceId: 
       url: `${endpoint}/asset/upload`,
       headers: {
         'x-api-key': key,
-        ...data.getHeaders(),
+        ...data.getHeaders()
       },
       maxContentLength: Infinity,
       maxBodyLength: Infinity,
