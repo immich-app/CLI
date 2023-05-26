@@ -10,10 +10,10 @@ import FormData from 'form-data';
 import * as cliProgress from 'cli-progress';
 import { stat } from 'fs/promises';
 // GLOBAL
-import * as mime from 'mime-types';
 import chalk from 'chalk';
 import pjson from '../package.json';
 import pLimit from 'p-limit';
+import mime from 'mime';
 
 const log = console.log;
 const rl = readline.createInterface({
@@ -28,16 +28,11 @@ const SUPPORTED_MIME = [
   'image/heic',
   'image/jpeg',
   'image/png',
-  'image/jpg',
   'image/gif',
   'image/heic',
   'image/heif',
-  'image/dng',
-  'image/x-adobe-dng',
   'image/webp',
   'image/tiff',
-  'image/nef',
-  'image/x-nikon-nef',
 
   // VIDEO
   'video/mp4',
@@ -45,7 +40,18 @@ const SUPPORTED_MIME = [
   'video/quicktime',
   'video/x-msvideo',
   'video/3gpp',
+
+  //CUSTOM
+  'image/x-adobe-dng',
+  'image/x-nikon-nef',
 ];
+
+const custom_types = {
+  'image/x-adobe-dng': ['dng'],
+  'image/x-nikon-nef': ['nef'],
+};
+
+mime.define(custom_types);
 
 program.name('immich').description('Immich command line interface').version(pjson.version);
 
@@ -60,6 +66,7 @@ program
       'Immich server address (http://<your-ip>:2283/api or https://<your-domain>/api)',
     ).env('IMMICH_SERVER_ADDRESS'),
   )
+  .addOption(new Option('-re, --regex <value>', 'Regex for file filtering').env('IMMICH_FILTER'))
   .addOption(new Option('-r, --recursive', 'Recursive').env('IMMICH_RECURSIVE').default(false))
   .addOption(new Option('-y, --yes', 'Assume yes on all interactive prompts').env('IMMICH_ASSUME_YES'))
   .addOption(new Option('-da, --delete', 'Delete local assets after upload').env('IMMICH_DELETE_ASSETS'))
@@ -124,8 +131,10 @@ async function upload(
     uploadThreads,
     album: createAlbums,
     deviceUuid: deviceUuid,
+    regex
   }: any,
 ) {
+  const file_regex = new RegExp(regex)
   const endpoint = server;
   const deviceId = deviceUuid || (await si.uuid()).os || 'CLI';
   const osInfo = (await si.osInfo()).distro;
@@ -179,7 +188,8 @@ async function upload(
   const uniqueFiles = new Set(files);
 
   for (const filePath of uniqueFiles) {
-    const mimeType = mime.lookup(filePath) as string;
+    if(!file_regex.test(filePath)) continue;
+    const mimeType = mime.getType(filePath) as string;
     if (SUPPORTED_MIME.includes(mimeType)) {
       try {
         const fileStat = fs.statSync(filePath);
@@ -269,7 +279,7 @@ async function upload(
             limit(async () => {
               try {
                 const res = await startUpload(endpoint, key, asset, deviceId);
-                progressBar.increment(1, { filepath: asset.filePath });
+                progressBar.increment(1, { filepath: asset.filePath.replace(process.cwd(), "") });
                 if (res && (res.status == 201 || res.status == 200)) {
                   if (deleteLocalAsset == 'y') {
                     fs.unlink(asset.filePath, (err) => {
@@ -385,7 +395,9 @@ async function startUpload(endpoint: string, key: string, asset: any, deviceId: 
     data.append('fileExtension', path.extname(asset.filePath));
     data.append('duration', '0:00:00.000000');
 
-    data.append('assetData', fs.createReadStream(asset.filePath));
+    data.append('assetData', fs.createReadStream(asset.filePath), {
+      contentType: mime.getType(asset.filePath) || undefined
+    });
 
     try {
       await fs.promises.access(`${asset.filePath}.xmp`, fs.constants.W_OK);
@@ -398,7 +410,7 @@ async function startUpload(endpoint: string, key: string, asset: any, deviceId: 
       url: `${endpoint}/asset/upload`,
       headers: {
         'x-api-key': key,
-        ...data.getHeaders(),
+        ...data.getHeaders()
       },
       maxContentLength: Infinity,
       maxBodyLength: Infinity,
@@ -499,7 +511,7 @@ async function validateConnection(endpoint: string, key: string) {
 }
 
 function getAssetType(filePath: string) {
-  const mimeType = mime.lookup(filePath) as string;
+  const mimeType = mime.getType(filePath) as string;
 
   return mimeType.split('/')[0].toUpperCase();
 }
