@@ -78,6 +78,7 @@ program
       'Upload assets recursively from the specified directory (DEPRECATED, use path argument with --recursive instead)',
     ).env('IMMICH_TARGET_DIRECTORY'),
   )
+  .addOption(new Option('-e, --exclude <value>', 'Regular expression to exclude files or folders by').env('IMMICH_EXCLUDE'))
   .argument('[paths...]', 'One or more paths to assets to be uploaded')
   .action((paths, options) => {
     if (options.directory) {
@@ -124,6 +125,7 @@ async function upload(
     uploadThreads,
     album: createAlbums,
     deviceUuid: deviceUuid,
+    exclude,
   }: any,
 ) {
   const endpoint = server;
@@ -150,9 +152,14 @@ async function upload(
     crawler = crawler.withMaxDepth(0);
   }
 
+  const excludeRegexTest = exclude ? new RegExp(exclude).test : () => false;
+
   const files: any[] = [];
 
   for (const newPath of paths) {
+    if (excludeRegexTest(newPath)) {
+      continue;
+    }
     try {
       // Check if the path can be accessed
       fs.accessSync(newPath);
@@ -167,6 +174,9 @@ async function upload(
       // Path is a directory so use the crawler to crawl it (potentially very large list)
       const children = crawler.crawl(newPath).sync() as PathsOutput;
       for (const child of children) {
+        if (excludeRegexTest(child)) {
+          continue;
+        }
         files.push(child);
       }
     } else {
