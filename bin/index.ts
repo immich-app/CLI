@@ -377,7 +377,7 @@ async function upload(
 
 			try {
 				fs.writeFileSync('duplicates.txt', duplicates.join('\n'));
-				log(chalk.green(`duplicates.txt created`));
+				log(chalk.green(`Wrote ${duplicates.length} file names to duplicates.txt`));
 			} catch(ex) {
 				chalk.red(`Error writing duplicates.txt: ${ex}`)
 			}
