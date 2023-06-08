@@ -274,9 +274,7 @@ async function upload(
                 progressBar.increment(1, { filepath: asset.filePath });
                 if (res && (res.status == 201 || res.status == 200)) {
 		  if (res.data && res.data.duplicate) {
-			const filePathSplit = asset.filePath.split('/');
-		  	duplicates.push(filePathSplit[filePathSplit.length-1]);
-			return;
+		  	duplicates.push(asset.filePath);
 		  }
                   if (deleteLocalAsset == 'y') {
                     fs.unlink(asset.filePath, (err) => {
@@ -366,18 +364,24 @@ async function upload(
      
       // Ask to create a file that contains the duplicate file names. 
       if (duplicates.length) {
+
       	log(chalk.yellow(`${duplicates.length} files were not uploaded because they were identified as duplicates on the server`));
-	const writeDupes = await new Promise((resolve) => {
-          rl.question('Do you want to write the file names of the duplicates to a file? (duplicates.txt) (y/n) ', resolve);
-        });
 
-	if (writeDupes == 'y' || writeDupes == 'Y') {
+	if (deleteLocalAsset != 'y') {
 
-		try {
-			fs.writeFileSync('duplicates.txt', duplicates.join('\n'));
-			log(chalk.green(`duplicates.txt created`));
-		} catch(ex) {
-			chalk.red(`Error writing duplicates.txt: ${ex}`)
+		const writeDupes = assumeYes ? 'y' : await new Promise((resolve) => {
+          		rl.question('Do you want to write the file names of the duplicates to a file? (duplicates.txt) (y/n) ', resolve);
+        	});
+
+		if (writeDupes == 'y' || writeDupes == 'Y') {
+
+			try {
+				fs.writeFileSync('duplicates.txt', duplicates.join('\n'));
+				log(chalk.green(`duplicates.txt created`));
+			} catch(ex) {
+				chalk.red(`Error writing duplicates.txt: ${ex}`)
+			}
+
 		}
 
 	}
