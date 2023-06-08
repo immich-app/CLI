@@ -257,6 +257,8 @@ async function upload(
 
       const limit = pLimit(uploadThreads ?? 5);
 
+      const duplicates: string[] = [];
+
       for (const asset of localAssets) {
         const album = asset.filePath.split(path.sep).slice(-2)[0];
         if (!assetDirectoryMap.has(album)) {
@@ -271,6 +273,9 @@ async function upload(
                 const res = await startUpload(endpoint, key, asset, deviceId);
                 progressBar.increment(1, { filepath: asset.filePath });
                 if (res && (res.status == 201 || res.status == 200)) {
+		  if (res.data && res.data.duplicate) {
+		  	duplicates.push(asset.filePath);
+		  }
                   if (deleteLocalAsset == 'y') {
                     fs.unlink(asset.filePath, (err) => {
                       if (err) {
@@ -356,6 +361,32 @@ async function upload(
       }
 
       log(chalk.yellow(`Failed to upload ${errorAssets.length} files `), errorAssets);
+     
+      // Ask to create a file that contains the duplicate file names. 
+      if (duplicates.length) {
+
+      	log(chalk.yellow(`${duplicates.length} files were not uploaded because they were identified as duplicates on the server`));
+
+	if (deleteLocalAsset != 'y') {
+
+		const writeDupes = assumeYes ? 'y' : await new Promise((resolve) => {
+          		rl.question('Do you want to write the file names of the duplicates to a file? (duplicates.txt) (y/n) ', resolve);
+        	});
+
+		if (writeDupes == 'y' || writeDupes == 'Y') {
+
+			try {
+				fs.writeFileSync('duplicates.txt', duplicates.join('\n'));
+				log(chalk.green(`Wrote ${duplicates.length} file names to duplicates.txt`));
+			} catch(ex) {
+				chalk.red(`Error writing duplicates.txt: ${ex}`)
+			}
+
+		}
+
+	}
+
+      } 
 
       if (errorAssets.length > 0) {
         process.exit(1);
