@@ -257,7 +257,7 @@ async function upload(
 
       const limit = pLimit(uploadThreads ?? 5);
 
-      const duplicates: Array<string> = [];
+      const duplicates: string[] = [];
 
       for (const asset of localAssets) {
         const album = asset.filePath.split(path.sep).slice(-2)[0];
