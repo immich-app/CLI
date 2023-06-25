@@ -18,7 +18,7 @@ build:
         tag=":$CI_COMMIT_REF_SLUG"
         echo "Running on branch '$CI_COMMIT_BRANCH': tag = $tag"
       fi
-    - docker build --pull -t "$CI_REGISTRY_IMAGE${tag}" .
+    - docker build --no-cache --pull -t "$CI_REGISTRY_IMAGE${tag}" .
     - docker push "$CI_REGISTRY_IMAGE${tag}" # this is commented out since it fails for now as I cannot have a docker repository behind traefik with forward-auth enabled.
   # Run this job in a branch where a Dockerfile exists
   rules:
