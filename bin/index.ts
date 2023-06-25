@@ -83,6 +83,12 @@ program
       'Upload assets recursively from the specified directory (DEPRECATED, use path argument with --recursive instead)',
     ).env('IMMICH_TARGET_DIRECTORY'),
   )
+  .addOption(
+    new Option(
+      '-i, --ignore <value>', 
+      'Ignore files matching regexp',
+    ).env('IMMICH_IGNORE_REGEXP')
+  )
   .argument('[paths...]', 'One or more paths to assets to be uploaded')
   .action((paths, options) => {
     if (options.directory) {
@@ -113,6 +119,15 @@ program
         }
       }
     }
+    if (options.ignore) {
+      options.ignore=options.ignore.split(',')
+      //log(`Ignore: ${options.ignore[1]}`)
+    }
+    else {
+      log(`No Ignore oprion given`)
+      options.ignore=[]
+    }
+
     upload(paths, options);
   });
 
@@ -130,6 +145,7 @@ async function upload(
     album: createAlbums,
     deviceUuid: deviceUuid,
     import: doImport,
+    ignore,
   }: any,
 ) {
   const endpoint = server;
@@ -185,21 +201,40 @@ async function upload(
   const uniqueFiles = new Set(files);
 
   for (const filePath of uniqueFiles) {
-    const mimeType = mime.lookup(filePath) as string;
-    if (SUPPORTED_MIME.includes(mimeType)) {
-      try {
-        const fileStat = fs.statSync(filePath);
-        localAssets.push({
-          id: `${path.basename(filePath)}-${fileStat.size}`.replace(/\s+/g, ''),
-          filePath,
-        });
-      } catch (e) {
-        errorAssets.push({
-          file: filePath,
-          reason: e,
-          response: e.response?.data,
-        });
-        continue;
+
+    //log(`Iterating over ${filePath} ${path.basename(filePath)}`)
+    //var debug=filePath.match("@eaDir")
+    //log(`Iterating over2 ${debug}`)
+
+    var doIgnore=false
+    for (const regexp of ignore) {
+      if (filePath.match(regexp)) {
+        //log(`MATCH: ${regexp} in ${filePath}`)
+        doIgnore=true
+        break
+      }
+      //else {
+      //  log(`NOmatch: ${regexp} in ${filePath}`)
+      //}
+    }
+
+    if (!doIgnore) {
+      const mimeType = mime.lookup(filePath) as string;
+      if (SUPPORTED_MIME.includes(mimeType)) {
+        try {
+          const fileStat = fs.statSync(filePath);
+          localAssets.push({
+            id: `${path.basename(filePath)}-${fileStat.size}`.replace(/\s+/g, ''),
+            filePath,
+          });
+        } catch (e) {
+          errorAssets.push({
+            file: filePath,
+            reason: e,
+            response: e.response?.data,
+          });
+          continue;
+        }
       }
     }
   }
