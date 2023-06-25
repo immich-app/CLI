@@ -123,9 +123,10 @@ program
       options.ignore=options.ignore.split(',')
       //log(`Ignore: ${options.ignore[1]}`)
     }
-    //else {
-    //  log(`No Ignore oprion given`)
-    //}
+    else {
+      log(`No Ignore oprion given`)
+      options.ignore=[]
+    }
 
     upload(paths, options);
   });
