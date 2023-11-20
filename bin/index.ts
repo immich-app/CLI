@@ -14,6 +14,7 @@ import * as mime from 'mime-types';
 import chalk from 'chalk';
 import pjson from '../package.json';
 import pLimit from 'p-limit';
+import { execSync } from 'child_process';
 
 const log = console.log;
 const rl = readline.createInterface({
@@ -48,6 +49,18 @@ program
   )
   .addOption(new Option('-i, --import', 'Import instead of upload').env('IMMICH_IMPORT').default(false))
   .addOption(new Option('-id, --device-uuid <value>', 'Set a device UUID').env('IMMICH_DEVICE_UUID'))
+  .addOption(
+    new Option(
+      '-f, --filter <cmd>',
+      [
+        'Run a script to filter local files.',
+        'Each file will be provided to this script as the first argument.',
+        'If the provided command exits with a non-zero exit code, the file will not be processed.',
+      ].join(' '),
+    )
+      .env('IMMICH_IMPORT_FILTER')
+      .default(''),
+  )
   .addOption(
     new Option(
       '-d, --directory <value>',
@@ -101,6 +114,7 @@ async function upload(
     album: createAlbums,
     deviceUuid: deviceUuid,
     import: doImport,
+    filter: filterCmd,
   }: any,
 ) {
   const endpoint = server;
@@ -129,7 +143,7 @@ async function upload(
     crawler = crawler.withMaxDepth(0);
   }
 
-  const files: any[] = [];
+  const files: string[] = [];
 
   for (const newPath of paths) {
     try {
@@ -152,6 +166,23 @@ async function upload(
       // Path is a single file
       files.push(path.resolve(newPath));
     }
+  }
+
+  if (filterCmd) {
+    log(`Performing file filtering ...`);
+    const filterResults: typeof files = files.filter((file) => {
+      try {
+        execSync(`${filterCmd} "${file}"`, { stdio: 'inherit' });
+        return true;
+      } catch (_) {
+        // TODO: Add log level support to the CLI script.
+        // console.info(`Filtered out file: %s`, file);
+      }
+      return false;
+    });
+    log(`Filtered out ${files.length - filterResults.length} files from ${files.length}`);
+    files.splice(0, files.length);
+    files.concat(filterResults);
   }
 
   // Ensure that list of files only has unique entries
@@ -463,7 +494,7 @@ async function getAssetInfoFromServer(endpoint: string, key: string, deviceId: s
     return res.data;
   } catch (e) {
     log(chalk.red("Error getting device's uploaded assets"));
-    console.log(e)
+    console.log(e);
     process.exit(1);
   }
 }
